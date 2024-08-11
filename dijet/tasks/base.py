@@ -16,7 +16,7 @@ from columnflow.tasks.framework.mixins import (
 from columnflow.config_util import get_datasets_from_process
 from columnflow.util import dev_sandbox, DotDict
 
-from dijet.tasks.mixins import DiJetVariablesMixin, DiJetSamplesMixin
+from dijet.tasks.mixins import DiJetVariablesMixin, DiJetDataMCSamplesMixin
 
 
 class DiJetTask(BaseTask):
@@ -25,7 +25,7 @@ class DiJetTask(BaseTask):
 
 class HistogramsBaseTask(
     DiJetTask,
-    DiJetSamplesMixin,
+    DiJetDataMCSamplesMixin,
     CategoriesMixin,
     DiJetVariablesMixin,
     ProducersMixin,

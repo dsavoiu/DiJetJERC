@@ -114,6 +114,13 @@ def add_config(
     cfg.x.default_asymmetry_variable = "dijets_asymmetry"
     cfg.x.default_binning_variables = ["probejet_abseta", "dijets_pt_avg"]
 
+    # default dijet samples, values need to be
+    # keys in `cfg.x.samples` defined below
+    cfg.x.default_samples = {
+        "data": "data",
+        "mc": "qcdht",
+    }
+
     # process groups for conveniently looping over certain processs
     # (used in wrapper_factory and during plotting)
     cfg.x.process_groups = {

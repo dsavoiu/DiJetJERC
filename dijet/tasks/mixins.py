@@ -200,7 +200,7 @@ class DiJetSamplesMixin(ConfigTask):
         config_inst = params["config_inst"]
 
         # resolve datasets for samples
-        if "samples" in params:
+        if "samples" in params and params["samples"]:
             config_samples = config_inst.x("samples", {})
 
             # resolve datasets
@@ -262,3 +262,69 @@ class DiJetSamplesMixin(ConfigTask):
     def samples_repr(self):
         return self.get_samples_repr(self.samples)
 
+
+class DiJetDataMCSamplesMixin(DiJetSamplesMixin):
+    """
+    Like `DiJetSamplesMixin`, but adds separate parameters `--sample-data` and `--sample-mc`.
+
+    Defaults for these parameters can be specified in the configuration under `default_samples`.
+    """
+
+    # make `datasets` parameter private -> value computed based on other variable parameters
+    samples = DiJetSamplesMixin.samples.copy()
+    samples.visibility = luigi.parameter.ParameterVisibility.PRIVATE
+
+    sample_data = luigi.Parameter(
+        default=None,
+        description="sample to use for data; a mapping to a corresponding list of datasets must be "
+        "defined in the auxiliary data of the config under the key 'samples'; mapped datasets can "
+        "also be patterns or keys of a mapping defined in the 'dataset_groups' auxiliary data of "
+        "the config; when not given, uses sample registered in the auxiliary data of the config under "
+        "the key 'default_samples'."
+    )
+
+    sample_mc = luigi.Parameter(
+        default=None,
+        description="sample to use for MC; a mapping to a corresponding list of datasets must be "
+        "defined in the auxiliary data of the config under the key 'samples'; mapped datasets can "
+        "also be patterns or keys of a mapping defined in the 'dataset_groups' auxiliary data of "
+        "the config; when not given, uses sample registered in the auxiliary data of the config under "
+        "the key 'default_samples'."
+    )
+
+    @classmethod
+    def resolve_param_values(cls, params):
+
+        # delegate to base class to perform sample resolution
+        params = super().resolve_param_values(params)
+
+        if "config_inst" not in params:
+            return params
+        config_inst = params["config_inst"]
+
+        # check config for datasets for samples
+        default_samples = config_inst.x("default_samples", {})
+
+        # construct
+        params["samples"] = []
+        missing_config_keys = set()
+        for key in ("mc", "data"):
+            param_name = f"sample_{key}"
+            if params[param_name] is None:
+                params[param_name] = default_samples.get(key, None)
+            if params[param_name] is None:
+                missing_config_keys.add(f"default_samples.{key}")
+                continue
+
+            params["samples"].append(params[param_name])
+
+        if missing_config_keys:
+            missing_config_keys_str = ",".join(sorted(missing_config_keys))
+            raise ValueError(
+                f"mandatory config keys not found, please add them to the "
+                f"config: {missing_config_keys_str}",
+            )
+
+        params["samples"] = tuple(params["samples"])
+
+        return params
