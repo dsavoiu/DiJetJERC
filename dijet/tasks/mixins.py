@@ -306,6 +306,8 @@ class DiJetDataMCSamplesMixin(DiJetSamplesMixin):
         default_samples = config_inst.x("default_samples", {})
 
         # construct
+        if "samples" in params and params["samples"]:
+            print("Warning: parameter `samples` ")
         params["samples"] = []
         missing_config_keys = set()
         for key in ("mc", "data"):

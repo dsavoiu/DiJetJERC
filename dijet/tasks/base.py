@@ -134,9 +134,11 @@ class HistogramsBaseTask(
 
         elif self.branching_type == "merged":
             # return only data branch
-            # TODO: don't hardcode data sample name
             # TODO: 'samples' instead of 'sample' in the branch data
-            return [b for b in branches if b.sample == "data"]
+            branches = super().create_branch_map()
+            branches = [b for b in branches if not b.is_mc]
+            assert len(branches) == 1, f"expected 1 data sample, found {len(branches)}"
+            return branches
 
         else:
             assert False, "internal error"

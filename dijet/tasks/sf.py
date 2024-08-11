@@ -43,9 +43,10 @@ class SF(HistogramsBaseTask):
         Workflow has exactly one branch, corresponding to the 'data' process
         for which scale factors should be computed.
         """
-        branch_map = super().create_branch_map()
-        # TODO: don't hardcode data sample name
-        return [b for b in branch_map if b.sample == "data"]
+        branches = super().create_branch_map()
+        branches = [b for b in branches if not b.is_mc]
+        assert len(branches) == 1, "only one MC sample allowed"
+        return branches
 
     def requires(self):
         # require JERs for both data and MC
@@ -53,11 +54,11 @@ class SF(HistogramsBaseTask):
         return {
             "data": self.reqs.JER.req_different_branching(
                 self,
-                samples=("data",),
+                samples=(self.sample_data,)
             ),
             "mc": self.reqs.JER.req_different_branching(
                 self,
-                samples=("qcdht",),
+                samples=(self.sample_mc,)
             ),
         }
 
