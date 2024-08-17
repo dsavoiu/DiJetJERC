@@ -1,15 +1,18 @@
 # coding: utf-8
 from __future__ import annotations
 
+import itertools
 import law
 
-# from dijet.tasks.base import HistogramsBaseTask
+from functools import partial
+
 from columnflow.util import maybe_import
 from columnflow.tasks.framework.base import Requirements
 
 from dijet.tasks.sf import SF
 from dijet.plotting.base import PlottingBaseTask
-from dijet.plotting.util import eta_bin, add_text, dot_to_p
+from dijet.plotting.asymmetry import PlotAsymmetries
+from dijet.plotting.util import annotate_corner, get_bin_slug, get_bin_label
 
 hist = maybe_import("hist")
 np = maybe_import("numpy")
@@ -18,15 +21,20 @@ mplhep = maybe_import("mplhep")
 
 
 class PlotSFs(
+    PlotAsymmetries,  # in order to reuse branch map and output function
     PlottingBaseTask,
 ):
     """
-    Task to plot all SFs.
-    One plot for each eta bin for each method (fe,sm).
+    Task to plot the JER scale factors.
+
+    Shows the ratios of JERs extracted from data and MC
+    provided via `--samples`. One plot is produced for each abseta bin
+    for each method (fe, sm).
+    The methods to take into account are given as `--categories`.
     """
 
     # how to create the branch map
-    branching_type = SF.branching_type
+    branching_type = "merged"
 
     # upstream requirements
     reqs = Requirements(
@@ -34,46 +42,23 @@ class PlotSFs(
         SF=SF,
     )
 
-    ### @law.workflow_property(setter=True, cache=True, empty_value=None)
-    ### def binning_info(self):
-    ###     """
-    ###     Open the SF task outputs to determine binning and set up plot. 
-    ###     """
-    ###     # check if the merging stats are present
-    ###     sf_task = self.reqs.SF.req_different_branching(self)
-    ###     sf_output = sf_task.output().collection[0]["sfs"]
-    ###     if not sf_output.exists():
-    ###         return None
-
-    ###     sfs = sf_output.load(formatter="pickle")
-    ###     return {
-    ###         ax.name: ax.edges
-    ###         for ax in sfs.axes
-    ###     }
-
-    ### @law.dynamic_workflow_condition
-    ### def workflow_condition(self):
-    ###     # the workflow can be constructed as soon as the binning information is known
-    ###     return self.binning_info is not None
-
-    ### @workflow_condition.create_branch_map
-    ### def create_branch_map(self):
-    ###     __import__("IPython").embed()
-    ###     return []
-
     #
     # methods required by law
     #
 
-    def output(self):
+    def create_branch_map(self):
+        """
+        Workflow extends branch map of input task, creating one branch
+        per entry in the input task branch map per each eta bin (eta).
+        """
+        return PlotAsymmetries.create_branch_map(self)
+
+    def output(self) -> dict[law.FileSystemTarget]:
         """
         Organize output as a (nested) dictionary. Output files will be in a single
         directory, which is determined by `store_parts`.
         """
-        return {
-            "dummy": self.target("DUMMY"),
-            "plots": self.target("plots", dir=True),
-        }
+        return PlotAsymmetries.output(self)
 
     def requires(self):
         return self.reqs.SF.req_different_branching(self, branch=-1)
@@ -88,67 +73,223 @@ class PlotSFs(
     #
 
     def load_input(self, key: str):
-        return self.input()[key].load(formatter="pickle")
-
+        coll_keys = [
+            coll_key
+            for coll_key, coll in self.input()["collection"].targets.items()
+        ]
+        if len(coll_keys) != 1:
+            raise RuntimeError(
+                f"found {len(coll_keys)} input collections, expected 1",
+            )
+        return self.input()["collection"][coll_keys[0]][key].load(formatter="pickle")
 
     #
     # task implementation
     #
 
-    def plot_sfs(self, sfs, pt):
-        fig, ax = plt.subplots()
+    @staticmethod
+    def _plot_shim(x, y, xerr=None, yerr=None, method=None, ax=None, **kwargs):
+        """
+        Draw one series of xy values.
+        """
+        if ax is None:
+            fig, ax = plt.subplots()
+        else:
+            fig, ax = plt.gcf(), plt.gca()
 
-        plt.errorbar(pt, sfs["nom"], yerr=sfs["err"], fmt="o", color="black")
+        method = method or "errorbar"
 
-        ax.set_xlabel(r"$p_{T}^{ave}$")
-        ax.set_ylabel("SF")
+        method_func = getattr(ax, method, None)
+        if method_func is None:
+            raise ValueError(f"invalid plot method '{method}'")
+
+        if method == "bar":
+            kwargs.update(
+                align="center",
+                width=2 * xerr,
+                yerr=yerr,
+            )
+        elif method == "step":
+            kwargs.pop("xerr", None)
+            kwargs.pop("yerr", None)
+            kwargs.pop("edgecolor", None)
+        else:
+            kwargs["xerr"] = xerr
+            kwargs["yerr"] = yerr
+
+        method_func(
+            x.flatten(),
+            y.flatten(),
+            **kwargs,
+        )
+
         return fig, ax
 
     def run(self):
-        sfs = self.load_input("sfs")["sfs"]
+        # load inputs (asymmetries and quantiles)
+        raw_inputs = {
+            key: self.load_input(key)
+            for key in ("sfs",)
+        }
 
-        sfs.view().value = np.nan_to_num(sfs.view().value, nan=0.0)
-        sfs.view().variance = np.nan_to_num(sfs.view().variance, nan=0.0)
+        # dict storing either variables or their gen-level equivalents
+        # for convenient access
+        vars_ = self._make_var_lookup(level="reco")
 
-        # TODO: don't hardcode axis names
-        eta_edges = sfs.axes["probejet_abseta"].edges
-        pt_centers = sfs.axes["dijets_pt_avg"].centers
+        # prepare inputs (apply slicing, clean nans)
+        def _prepare_input(histogram):
+            # map `nan` values to zero
+            v = histogram.view()
+            v.value = np.nan_to_num(v.value, nan=0.0)
+            v.variance = np.nan_to_num(v.variance, nan=0.0)
+            # return prepared histogram
+            return histogram
+        inputs = law.util.map_struct(_prepare_input, raw_inputs)
 
-        # Set plotting style
+        # binning information from first histogram object
+        # (assume identical binning for all)
+        def _iter_flat(d: dict):
+            if not isinstance(d, dict):
+                yield d
+                return
+            for k, v in d.items():
+                yield from _iter_flat(v)
+        ref_object = next(_iter_flat(inputs["sfs"]))
+
+        # binning information from inputs
+        ### alpha_edges = ref_object.axes[vars_["alpha"]].edges  # noqa
+        binning_variable_edges = {
+            bv: ref_object.axes[bv_resolved].edges
+            for bv, bv_resolved in vars_["binning"].items()
+            if bv not in ("probejet_abseta", "dijets_pt_avg")
+        }
+
+        # binning information from branch
+        eta_lo, eta_hi = self.branch_data.eta
+        eta_midp = 0.5 * (eta_lo + eta_hi)
+
+        def iter_bins(edges, **add_kwargs):
+            for i, (e_dn, e_up) in enumerate(zip(edges[:-1], edges[1:])):
+                yield {"up": e_up, "dn": e_dn, **add_kwargs}
+
+        # loop through bins and do plotting
         plt.style.use(mplhep.style.CMS)
+        ### for m, (ia, alpha_up), *bv_bins in itertools.product(  # noqa
+        for m, *bv_bins in itertools.product(
+            self.LOOKUP_CATEGORY_ID,
+            ### enumerate(alpha_edges[1:]),  # noqa
+            *[iter_bins(bv_edges, var_name=bv) for bv, bv_edges in binning_variable_edges.items()],
+        ):
+            # initialize figure and axes
+            fig, ax = plt.subplots()
+            mplhep.cms.label(
+                lumi=41.48,  # TODO: from self.config_inst.x.luminosity?
+                com=13,
+                ax=ax,
+                llabel="Private Work",
+                data=True,
+            )
 
-        pos_x = 0.05
-        pos_y = 0.95
-        # TODO: setup loops in branch map?
-        for m in self.LOOKUP_CATEGORY_ID:
-            for ie, (eta_lo, eta_hi) in enumerate(zip(eta_edges[:-1], eta_edges[1:])):
-
-                input_ = {
-                    "sfs": {
-                        "nom": sfs[hist.loc(self.LOOKUP_CATEGORY_ID[m]), ie, :].values(),
-                        "err": sfs[hist.loc(self.LOOKUP_CATEGORY_ID[m]), ie, :].variances(),
-                    },
-                    "pt": pt_centers,
-                }
-
-                fig, ax = self.plot_sfs(**input_)
-                mplhep.cms.label(
-                    lumi=41.48,  # TODO: from self.config_inst.x.luminosity?
-                    com=13,
-                    ax=ax,
-                    llabel="Private Work",
-                    data=True,
+            # selector to get current bin
+            bin_selector = {}
+            bin_selector = {
+                "category": hist.loc(self.LOOKUP_CATEGORY_ID[m]),
+                ### vars_["alpha"]: hist.loc(alpha_up - 0.001),  # noqa
+                vars_["binning"]["probejet_abseta"]: hist.loc(eta_midp),
+            }
+            for bv_bin in bv_bins:
+                bin_selector[vars_["binning"][bv_bin["var_name"]]] = (
+                    hist.loc(0.5 * (bv_bin["up"] + bv_bin["dn"]))
                 )
 
-                text_eta_bin = eta_bin(eta_lo, eta_hi)
-                add_text(ax, pos_x, pos_y, text_eta_bin)
-                print(f"Start with eta {text_eta_bin} for {m} method")
+            # get input histogram for widths
+            h_in = inputs["sfs"]["sfs"]
+            h_sliced = h_in[bin_selector]
 
-                plt.xlim(49, 2100)
-                # plt.ylim(0.8, 20)
-                ax.set_xscale("log")
-                plt.legend(loc="upper right")
+            # plot asymmetry distribution
+            plot_kwargs = dict(
+                self.config_inst.x("samples", {})
+                .get("data", {}).get("plot_kwargs", {}),
+            )
+            # resolve task-specific kwargs
+            plot_kwargs = plot_kwargs.get(
+                self.__class__,
+                plot_kwargs.get("__default__", {}),
+            )
 
-                store_bin_eta = f"eta_{dot_to_p(eta_lo)}_{dot_to_p(eta_hi)}"
-                self.save_plot(f"sfs_{m}_{store_bin_eta}", fig)
-                plt.close(fig)
+            # compute legend entry
+            def get_sample_label(sample):
+                return (
+                    self.config_inst.x("samples", {})
+                    .get(sample, {}).get("label", sample)
+                )
+            plot_kwargs["label"] = "/".join([
+                get_sample_label(self.branch_data.data_sample),
+                get_sample_label(self.branch_data.mc_sample),
+            ])
+
+            # plot JER
+            self._plot_shim(
+                h_sliced.axes[vars_["binning"]["dijets_pt_avg"]].centers,
+                h_sliced.values(),
+                yerr=np.sqrt(h_sliced.variances()),
+                ax=ax,
+                **plot_kwargs,
+            )
+
+            #
+            # annotations
+            #
+
+            # curry function for convenience
+            annotate = partial(annotate_corner, ax=ax, loc="upper left")
+
+            ### # alpha bin  # noqa
+            ### bin_label = get_bin_label(self.alpha_variable_inst, (0, alpha_up))  # noqa
+            ### annotate(text=bin_label, xy_offset=(20, -20))  # noqa
+
+            # eta bin
+            bin_label = get_bin_label(self.binning_variable_insts["probejet_abseta"], (eta_lo, eta_hi))
+            annotate(text=bin_label, xy_offset=(20, -20 - 30))
+
+            # other binning variables
+            for i, bv_bin in enumerate(bv_bins):
+                bin_edges = (bv_bin["dn"], bv_bin["up"])
+                bin_label = get_bin_label(self.binning_variable_insts[bv_bin["var_name"]], bin_edges)
+                annotate(
+                    text=bin_label,
+                    xy_offset=(20, -20 - 30 * (i + 2)),
+                )
+
+            # figure adjustments
+            # pt_edges = ref_object.axes["dijets_pt_avg"].edges
+            # ax.set_xlim(pt_edges[0], pt_edges[-1])
+            ax.set_xscale("log")
+            ax.set_xlim(49, 2100)
+            # ax.set_ylim(0.8, 20)
+            ax.legend(loc="upper right")
+            ax.set_xlabel(
+                self.config_inst.get_variable(vars_["binning"]["dijets_pt_avg"]).get_full_x_title(),
+            )
+            ax.set_ylabel(r"Jet energy resolution scale factor")
+
+            # compute plot filename
+            fname_parts = [
+                # base name
+                "sfs",
+                # method
+                m,
+                ### # alpha  # noqa
+                ### get_bin_slug(self.alpha_variable_inst, (0, alpha_up)),  # noqa
+                # abseta bin
+                get_bin_slug(self.binning_variable_insts["probejet_abseta"], (eta_lo, eta_hi)),
+            ]
+            # other bins
+            for bv_bin in bv_bins:
+                bin_edges = (bv_bin["dn"], bv_bin["up"])
+                bin_slug = get_bin_slug(self.binning_variable_insts[bv_bin["var_name"]], bin_edges)
+                fname_parts.append(bin_slug)
+
+            # save plot to file
+            self.save_plot("__".join(fname_parts), fig)
+            plt.close(fig)
