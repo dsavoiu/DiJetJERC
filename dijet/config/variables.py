@@ -158,14 +158,15 @@ def add_variables(config: od.Config) -> None:
             var_kwargs.setdefault("aux", {})["gen_variable"] = gen_name
 
             # kwargs to pass to add_variable for gen-level variable
-            gen_var_kwargs = dict(kwargs,
+            gen_var_kwargs = dict(
+                kwargs,
                 name=gen_name,
                 expression=gen_expression,
                 x_title=gen_x_title,
             )
 
             # add reco variable to the aux data
-            gen_var_kwargs.setdefault("aux", {})["reco_variable"] = kwargs['name']
+            gen_var_kwargs.setdefault("aux", {})["reco_variable"] = kwargs["name"]
 
             if gen_aux:
                 gen_var_kwargs.setdefault("aux", {}).update(gen_aux)
@@ -174,7 +175,7 @@ def add_variables(config: od.Config) -> None:
         elif gen_expression is not None:
             print(
                 f"[WARNING] `gen_expression` provided for variable "
-                "'{kwargs['name']}', but no `gen_name` -> no gen-level "
+                f"'{kwargs['name']}', but no `gen_name` -> no gen-level "
                 "variable will be added",
             )
 
@@ -182,7 +183,6 @@ def add_variables(config: od.Config) -> None:
         config.add_variable(**var_kwargs)
         if gen_name is not None:
             config.add_variable(**gen_var_kwargs)
-
 
     # alpha variable for additional jet activity
     add_dijet_variable(
@@ -194,6 +194,23 @@ def add_variables(config: od.Config) -> None:
         # gen_name="dijets_alpha_gen",
         # gen_expression="alpha_gen",
         # gen_x_title=r"$\alpha$ (gen)",
+        aux={
+            # options for formatting plain-text string used to
+            # represent variable and bin (e.g. in filenames)
+            "slug_name": "alpha_lt",
+            "bin_slug_format": lambda value: f"{value:1.3f}".replace(".", "p"),
+            "bin_slug_func": lambda self, bin_edges: "_".join([
+                self.x.slug_name,
+                self.x.bin_slug_format(bin_edges[1]),
+            ]),
+            # options for formatting label used in plots to indicate
+            # represent variable and bin
+            "bin_label_format": lambda value: f"{value:g}",
+            "bin_label_func": lambda self, bin_edges: " < ".join([
+                self.x_title,
+                self.x.bin_label_format(bin_edges[1]),
+            ]),
+        },
     )
 
     # same as above, but with full range (0-1) and finer binning
@@ -206,6 +223,23 @@ def add_variables(config: od.Config) -> None:
         # gen_name="dijets_alpha_gen_fine",
         # gen_expression="alpha_gen",
         # gen_x_title=r"$\alpha$ (gen)",
+        aux={
+            # options for formatting plain-text string used to
+            # represent variable and bin (e.g. in filenames)
+            "slug_name": "alpha_lt",
+            "bin_slug_format": lambda value: f"{value:1.3f}".replace(".", "p"),
+            "bin_slug_func": lambda self, bin_edges: "_".join([
+                self.x.slug_name,
+                self.x.bin_slug_format(bin_edges[1]),
+            ]),
+            # options for formatting label used in plots to indicate
+            # represent variable and bin
+            "bin_label_format": lambda value: f"{value:g}",
+            "bin_label_func": lambda self, bin_edges: " < ".join([
+                self.x_title,
+                self.x.bin_label_format(bin_edges[1]),
+            ]),
+        },
     )
 
     #
@@ -255,6 +289,11 @@ def add_variables(config: od.Config) -> None:
         gen_name="dijets_pt_avg_gen",
         gen_expression="dijets.pt_avg_gen",
         gen_x_title=r"$p_{T}^{avg}$ (gen)",
+        aux={
+            "slug_name": "pt",
+            "bin_slug_format": lambda value: f"{int(value):d}",
+            "bin_label_format": lambda value: f"{int(value):d}",
+        },
     )
 
     # eta bin is always defined by probe jet
@@ -267,10 +306,13 @@ def add_variables(config: od.Config) -> None:
         x_title=r"$|\eta|$",
         aux={
             "inputs": {"probe_jet.eta"},
+            "slug_name": "abseta",
+            "bin_slug_format": lambda value: f"{value:1.3f}".replace(".", "p"),
+            "bin_label_format": lambda value: f"{value:g}",
         },
         gen_name="probejet_abseta_gen",
         # use `genJetIdx` to get matched gen jet
-        gen_expression=lambda events: abs(ak.firsts(events["GenJet"][ak.singletons(events["probe_jet"]["genJetIdx"])].eta)),
+        gen_expression=lambda events: abs(ak.firsts(events["GenJet"][ak.singletons(events["probe_jet"]["genJetIdx"])].eta)),  # noqa
         gen_x_title=r"$|\eta|$ (gen)",
         gen_aux={
             "inputs": {"GenJet.*", "probe_jet.genJetIdx"},
@@ -361,7 +403,7 @@ def add_uhh2_synch_variables(config: od.Config) -> None:
             "expression_uhh2": "uhh2.alpha",
             "binning": np.linspace(-1, 1, 101),
             "diff_binning": np.linspace(-2, 2, 101),
-            "label": r"$\alpha$"
+            "label": r"$\alpha$",
         },
         "reference_jet_abseta": {
             "expression_cf": lambda x: abs(x.reference_jet.eta),
@@ -424,21 +466,21 @@ def add_uhh2_synch_variables(config: od.Config) -> None:
             "inputs": {"probe_jet.*", "uhh.*"},
             "binning": np.linspace(0, 5, 50),
             "diff_binning": np.linspace(-5, 5, 101),
-            "label": r"Probe jet $|\eta|$"
+            "label": r"Probe jet $|\eta|$",
         },
         "probe_jet_eta": {
             "expression_cf": "probe_jet.eta",
             "expression_uhh2": "uhh2.probejet_eta",
             "binning": np.linspace(-5, 5, 101),
             "diff_binning": np.linspace(-2, 2, 101),
-            "label": r"Probe jet $\eta$"
+            "label": r"Probe jet $\eta$",
         },
         "probe_jet_phi": {
             "expression_cf": "probe_jet.phi",
             "expression_uhh2": "uhh2.probejet_phi",
             "binning": np.linspace(-3.2, 3.2, 101),
             "diff_binning": np.linspace(-2, 2, 101),
-            "label": r"Probe jet $\phi$"
+            "label": r"Probe jet $\phi$",
         },
         "probe_jet_pt": {
             "expression_cf": "probe_jet.pt",
@@ -446,7 +488,7 @@ def add_uhh2_synch_variables(config: od.Config) -> None:
             "scale": "log",
             "binning": np.logspace(np.log10(5), np.log10(500), 101),
             "diff_binning": np.linspace(-100, 100, 101),
-            "label": r"Probe jet $p_{T}$"
+            "label": r"Probe jet $p_{T}$",
         },
     }
 

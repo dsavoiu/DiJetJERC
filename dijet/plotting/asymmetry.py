@@ -3,7 +3,8 @@
 import itertools
 import law
 
-# from dijet.tasks.base import HistogramsBaseTask
+from functools import partial
+
 from columnflow.util import maybe_import, DotDict
 from columnflow.tasks.framework.base import Requirements
 from columnflow.tasks.framework.remote import RemoteWorkflow
@@ -11,7 +12,7 @@ from columnflow.tasks.framework.remote import RemoteWorkflow
 from dijet.tasks.asymmetry import Asymmetry
 from dijet.constants import eta
 from dijet.plotting.base import PlottingBaseTask
-from dijet.plotting.util import eta_bin, pt_bin, alpha_bin, add_text, dot_to_p
+from dijet.plotting.util import annotate_corner, get_bin_slug, get_bin_label
 
 hist = maybe_import("hist")
 np = maybe_import("numpy")
@@ -25,9 +26,11 @@ class PlotAsymmetries(
     RemoteWorkflow,
 ):
     """
-    Task to plot asymmetry distributions. Shows the distribution for
-    `--asymmetry-variable` for all given `--samples` and `--levels`.
-    One plot is produced for each eta, pt and alpha bin for each method (fe,sm).
+    Task to plot asymmetry distributions.
+
+    Shows the distribution of the `--asymmetry-variable` for all given `--samples`
+    and `--levels`. One plot is produced for each eta, pt and alpha bin
+    for each method (fe, sm).
     The methods to take into account are given as `--categories`.
     """
 
@@ -36,15 +39,9 @@ class PlotAsymmetries(
 
     # upstream requirements
     reqs = Requirements(
-        RemoteWorkflow.reqs,
+        PlottingBaseTask.reqs,
         Asymmetry=Asymmetry,
     )
-
-    # TODO: use config
-    colors = {
-        "data": "black",
-        "qcdht": "indianred",
-    }
 
     #
     # methods required by law
@@ -52,10 +49,13 @@ class PlotAsymmetries(
 
     def create_branch_map(self):
         """
-        Workflow has one branch for each eta bin (eta).
-        TODO: Hard coded for now
-              Into Base Task
+        Workflow extends branch map of input task, creating one branch
+        per entry in the input task branch map per each eta bin (eta).
         """
+        # TODO: way to specify which variables to handle via branch
+        # map and which to loop over in `run` method
+        # TODO: don't hardcode eta bins, use dynamic workflow condition
+        # to read in bins from task inputs
         input_branches = super().create_branch_map()
 
         branches = []
@@ -69,17 +69,15 @@ class PlotAsymmetries(
 
         return branches
 
-    def output(self):
+    def output(self) -> dict[law.FileSystemTarget]:
         """
         Organize output as a (nested) dictionary. Output files will be in a single
         directory, which is determined by `store_parts`.
         """
-        eta_lo, eta_hi = self.branch_data.eta
-        n_eta_lo = dot_to_p(eta_lo)
-        n_eta_hi = dot_to_p(eta_hi)
+        eta_bin_slug = get_bin_slug(self.binning_variable_insts["probejet_abseta"], self.branch_data.eta)
         return {
-            "dummy": self.target(f"eta_{n_eta_lo}_{n_eta_hi}/DUMMY"),
-            "plots": self.target(f"eta_{n_eta_lo}_{n_eta_hi}", dir=True),
+            "dummy": self.target(f"{eta_bin_slug}/DUMMY"),
+            "plots": self.target(f"{eta_bin_slug}", dir=True),
         }
 
     def requires(self):
@@ -111,37 +109,11 @@ class PlotAsymmetries(
     # task implementation
     #
 
-    def plot_asymmetry(self, content, error, asym):
-        fig, ax = plt.subplots()
-        plt.bar(
-            asym.flatten(),
-            content["mc"].flatten(),
-            yerr=error["mc"].flatten(),
-            align="center",
-            width=np.diff(asym)[0],
-            alpha=0.6,
-            color=self.colors["mc"],
-            edgecolor="none",
-            label="MC",
-        )
-        plt.errorbar(
-            asym.flatten(),
-            content["da"].flatten(),
-            yerr=error["da"].flatten(),
-            fmt="o",
-            marker="o",
-            fillstyle="full",
-            color=self.colors["da"],
-            label="Data",
-        )
-
-        ax.set_xlabel("Asymmetry")
-        ax.set_ylabel(r"$\Delta$N/N")
-        ax.set_yscale("log")
-        return fig, ax
-
     @staticmethod
     def _plot_shim(x, y, xerr=None, yerr=None, method=None, ax=None, **kwargs):
+        """
+        Draw one series of xy values.
+        """
         if ax is None:
             fig, ax = plt.subplots()
         else:
@@ -157,14 +129,19 @@ class PlotAsymmetries(
             kwargs.update(
                 align="center",
                 width=2 * xerr,
+                yerr=yerr,
             )
+        elif method == "step":
+            kwargs.pop("xerr", None)
+            kwargs.pop("yerr", None)
+            kwargs.pop("edgecolor", None)
         else:
             kwargs["xerr"] = xerr
+            kwargs["yerr"] = yerr
 
         method_func(
             x.flatten(),
             y.flatten(),
-            yerr=yerr,
             **kwargs,
         )
 
@@ -191,14 +168,8 @@ class PlotAsymmetries(
             for level in self.levels
         }
 
-        # eta binning information from branch
-        eta_lo, eta_hi = self.branch_data.eta
-        eta_midp = 0.5 * (eta_lo + eta_hi)
-
         # prepare inputs (apply slicing, clean nans)
         def _prepare_input(histogram):
-            # # slice histogram to extact bin
-            # histogram = histogram[slicer]
             # map `nan` values to zero
             v = histogram.view()
             v.value = np.nan_to_num(v.value, nan=0.0)
@@ -217,6 +188,7 @@ class PlotAsymmetries(
                 yield from _iter_flat(v)
         ref_object = next(_iter_flat(inputs["asym"]))
 
+        # binning information from inputs
         alpha_edges = ref_object.axes[vars_["reco"]["alpha"]].edges
         binning_variable_edges = {
             bv: ref_object.axes[bv_resolved].edges
@@ -224,13 +196,16 @@ class PlotAsymmetries(
             if bv != "probejet_abseta"
         }
 
-        plt.style.use(mplhep.style.CMS)
+        # binning information from branch
+        eta_lo, eta_hi = self.branch_data.eta
+        eta_midp = 0.5 * (eta_lo + eta_hi)
 
         def iter_bins(edges, **add_kwargs):
             for i, (e_dn, e_up) in enumerate(zip(edges[:-1], edges[1:])):
                 yield {"up": e_up, "dn": e_dn, **add_kwargs}
 
-        # loop through bins
+        # loop through bins and do plotting
+        plt.style.use(mplhep.style.CMS)
         for m, (ia, alpha_up), *bv_bins in itertools.product(
             self.LOOKUP_CATEGORY_ID,
             enumerate(alpha_edges[1:]),
@@ -269,18 +244,26 @@ class PlotAsymmetries(
                 h_in = inputs["asym"][sample][level]
                 h_sliced = h_in[bin_selectors[level]]
 
-                # plot
+                # look up plotting kwargs under samples
                 plot_kwargs = dict(
                     self.config_inst.x("samples", {})
                     .get(sample, {}).get("plot_kwargs", {}),
                 )
+                # resolve task-specific kwargs
+                plot_kwargs = plot_kwargs.get(
+                    self.__class__,
+                    plot_kwargs.get("__default__", {}),
+                )
+                # adjust for gen-level
                 if level == "gen":
                     plot_kwargs.update({
                         "color": "forestgreen",
                         "label": "MC (gen)",
-                        # "method": "steps",  # TODO
+                        "method": "step",
+                        "where": "mid",
                     })
 
+                # plot asymmetry distribution
                 self._plot_shim(
                     h_sliced.axes[vars_[level]["asymmetry"]].centers,
                     h_sliced.values(),
@@ -290,18 +273,36 @@ class PlotAsymmetries(
                     **plot_kwargs,
                 )
 
-                # plot quantiles
+                # plot quantiles as vertical lines
                 hs_in_quantiles = inputs["quantile"][sample][level]
                 q_lo = hs_in_quantiles["low"][bin_selectors[level]].value
                 q_up = hs_in_quantiles["up"][bin_selectors[level]].value
                 ax.axvline(q_lo, 0, 0.67, color=plot_kwargs.get("color"), linestyle="--")
                 ax.axvline(q_up, 0, 0.67, color=plot_kwargs.get("color"), linestyle="--")
 
+            #
             # annotations
-            add_text(ax, 0.05, 0.95, alpha_bin(alpha_up))
-            add_text(ax, 0.05, 0.95, eta_bin(eta_lo, eta_hi), offset=0.05)
+            #
+
+            # curry function for convenience
+            annotate = partial(annotate_corner, ax=ax, loc="upper left")
+
+            # alpha bin
+            bin_label = get_bin_label(self.alpha_variable_inst, (0, alpha_up))
+            annotate(text=bin_label, xy_offset=(20, -20))
+
+            # eta bin
+            bin_label = get_bin_label(self.binning_variable_insts["probejet_abseta"], (eta_lo, eta_hi))
+            annotate(text=bin_label, xy_offset=(20, -20 - 30))
+
+            # other binning variables
             for i, bv_bin in enumerate(bv_bins):
-                add_text(ax, 0.05, 0.95, pt_bin(bv_bin["dn"], bv_bin["up"]), offset=0.05 * (2 + i))
+                bin_edges = (bv_bin["dn"], bv_bin["up"])
+                bin_label = get_bin_label(self.binning_variable_insts[bv_bin["var_name"]], bin_edges)
+                annotate(
+                    text=bin_label,
+                    xy_offset=(20, -20 - 30 * (i + 2)),
+                )
 
             # figure adjustments
             ax.set_xlim(-0.5, 0.5)
@@ -320,17 +321,15 @@ class PlotAsymmetries(
                 # method
                 m,
                 # alpha
-                f"alpha_lt_{dot_to_p(alpha_up)}",
+                get_bin_slug(self.alpha_variable_inst, (0, alpha_up)),
                 # abseta bin
-                f"abseta_{dot_to_p(eta_lo)}_{dot_to_p(eta_hi)}",
+                get_bin_slug(self.binning_variable_insts["probejet_abseta"], (eta_lo, eta_hi)),
             ]
             # other bins
             for bv_bin in bv_bins:
-                fname_parts.append("_".join([
-                    bv_bin["var_name"],
-                    dot_to_p(bv_bin["dn"]),
-                    dot_to_p(bv_bin["up"]),
-                ]))
+                bin_edges = (bv_bin["dn"], bv_bin["up"])
+                bin_slug = get_bin_slug(self.binning_variable_insts[bv_bin["var_name"]], bin_edges)
+                fname_parts.append(bin_slug)
 
             # save plot to file
             self.save_plot("__".join(fname_parts), fig)
