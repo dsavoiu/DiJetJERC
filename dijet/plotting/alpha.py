@@ -7,7 +7,6 @@ from functools import partial
 
 from columnflow.util import maybe_import
 from columnflow.tasks.framework.base import Requirements
-from columnflow.tasks.framework.remote import RemoteWorkflow
 
 from dijet.tasks.alpha import AlphaExtrapolation
 from dijet.plotting.base import PlottingBaseTask
@@ -23,14 +22,12 @@ mplhep = maybe_import("mplhep")
 class PlotWidth(
     PlotAsymmetries,  # in order to reuse branch map and output function
     PlottingBaseTask,
-    law.LocalWorkflow,
-    RemoteWorkflow,
 ):
     """
     Task to plot the extrapolation of asymmetry widths.
 
     Shows the width of the `--asymmetry-variable` for all given `--samples`
-    and `--levels`. One plot is produced for each eta and pt bin
+    and `--levels`. One plot is produced for each abseta and pt bin
     for each method (fe, sm).
     The methods to take into account are given as `--categories`.
     """
