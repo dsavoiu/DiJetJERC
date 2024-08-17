@@ -1,16 +1,19 @@
 # coding: utf-8
 
 def eta_bin(eta_lo, eta_hi):
-    return fr"{eta_lo}<$\eta$<{eta_hi}"
+    if abs(eta_lo) < 1e-3:
+        return fr"$|\eta|$ < {eta_hi:g}"
+    else:
+        return fr"{eta_lo:g} < $|\eta|$ < {eta_hi:g}"
 
 
 def pt_bin(pt_lo, pt_hi):
     spt = r"$p_\mathrm{T}$"
-    return fr"{pt_lo}<{spt}<{pt_hi}"
+    return fr"{int(pt_lo):d} < {spt} < {int(pt_hi):d} GeV"
 
 
 def alpha_bin(alpha):
-    salpha = r"$\alpha$<"
+    salpha = r"$\alpha$ < "
     return fr"{salpha}{alpha}"
 
 

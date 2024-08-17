@@ -137,11 +137,26 @@ def add_config(
     cfg.x.samples = {
         "data": {
             "datasets": "data_*",
-            "color": "k",
+            "plot_kwargs": {
+                "method": "errorbar",
+                "fmt": "o",
+                "marker": "o",
+                "fillstyle": "full",
+                "color": "k",
+                "label": "Data",
+            },
         },
         "qcdht": {
-            "datasets": "qcd_*",
-            "color": "indianred",
+            "datasets": "qcd_ht*",
+            "plot_kwargs": {
+                "method": "bar",
+                #"align": "center",
+                #"width": np.diff(asym)[0],
+                "alpha": 0.6,
+                "color": "indianred",
+                "edgecolor": "none",
+                "label": "MC",
+            },
         },
     }
 
