@@ -50,6 +50,32 @@ class PlottingBaseTask(
 
         return reqs
 
+
+    @law.workflow_property(setter=True, cache=True, empty_value=None)
+    def binning_info(self):
+        """
+        Open the input task outputs to determine binning and set up plot.
+        """
+        # check if the outputs of the dependent task are present
+        dep_task_inst = self.reqs[self.input_task_cls].req_different_branching(self, branch=-1)
+        dep_task_targets = dep_task_inst.output().collection[0][dep_task_inst.output_base_keys[0]]
+        if not dep_task_targets.exists():
+            return None
+
+        dep_task_outputs = dep_task_targets.load(formatter="pickle")
+        print(dep_task_outputs)
+        raise NotImplementedError
+        # return {
+        #     ax.name: ax.edges
+        #     for ax in sfs.axes
+        # }
+
+    @law.dynamic_workflow_condition
+    def workflow_condition(self):
+        # the workflow can be constructed as soon as the binning information is known
+        return self.binning_info is not None
+
+    @workflow_condition.create_branch_map
     def create_branch_map(self):
         """
         Workflow extends branch map of input task, creating one branch
@@ -59,6 +85,7 @@ class PlottingBaseTask(
         # map and which to loop over in `run` method
         # TODO: don't hardcode eta bins, use dynamic workflow condition
         # to read in bins from task inputs
+        # -> use self.binning_info
         input_branches = super().create_branch_map()
 
         branches = []
