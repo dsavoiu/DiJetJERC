@@ -1,16 +1,17 @@
 # coding: utf-8
+"""
+Task for plotting asymmetry distributions.
+"""
+from __future__ import annotations
 
 import itertools
 import law
 
 from functools import partial
 
-from columnflow.util import maybe_import, DotDict
-from columnflow.tasks.framework.base import Requirements
-from columnflow.tasks.framework.remote import RemoteWorkflow
+from columnflow.util import maybe_import
 
 from dijet.tasks.asymmetry import Asymmetry
-from dijet.constants import eta
 from dijet.plotting.base import PlottingBaseTask
 from dijet.plotting.util import annotate_corner, get_bin_slug, get_bin_label
 
@@ -22,8 +23,6 @@ mplhep = maybe_import("mplhep")
 
 class PlotAsymmetries(
     PlottingBaseTask,
-    law.LocalWorkflow,
-    RemoteWorkflow,
 ):
     """
     Task to plot asymmetry distributions.
@@ -37,56 +36,8 @@ class PlotAsymmetries(
     # how to create the branch map
     branching_type = "merged"
 
-    # upstream requirements
-    reqs = Requirements(
-        PlottingBaseTask.reqs,
-        Asymmetry=Asymmetry,
-    )
-
-    #
-    # methods required by law
-    #
-
-    def create_branch_map(self):
-        """
-        Workflow extends branch map of input task, creating one branch
-        per entry in the input task branch map per each eta bin (eta).
-        """
-        # TODO: way to specify which variables to handle via branch
-        # map and which to loop over in `run` method
-        # TODO: don't hardcode eta bins, use dynamic workflow condition
-        # to read in bins from task inputs
-        input_branches = super().create_branch_map()
-
-        branches = []
-        for ib in input_branches:
-            branches.extend([
-                DotDict.wrap(dict(ib, **{
-                    "eta": (eta_lo, eta_hi),
-                }))
-                for eta_lo, eta_hi in zip(eta[:-1], eta[1:])
-            ])
-
-        return branches
-
-    def output(self) -> dict[law.FileSystemTarget]:
-        """
-        Organize output as a (nested) dictionary. Output files will be in a single
-        directory, which is determined by `store_parts`.
-        """
-        eta_bin_slug = get_bin_slug(self.binning_variable_insts["probejet_abseta"], self.branch_data.eta)
-        return {
-            "dummy": self.target(f"{eta_bin_slug}/DUMMY"),
-            "plots": self.target(f"{eta_bin_slug}", dir=True),
-        }
-
-    def requires(self):
-        return self.reqs.Asymmetry.req_different_branching(self, branch=-1)
-
-    def workflow_requires(self):
-        reqs = super().workflow_requires()
-        reqs["key"] = self.requires_from_branch()
-        return reqs
+    # upstream workflow
+    input_task_cls = Asymmetry
 
     #
     # helper methods for handling task inputs/outputs

@@ -1,4 +1,8 @@
 # coding: utf-8
+"""
+Task for plotting jet energy resolution (JER).
+"""
+from __future__ import annotations
 
 import itertools
 import law
@@ -6,11 +10,9 @@ import law
 from functools import partial
 
 from columnflow.util import maybe_import
-from columnflow.tasks.framework.base import Requirements
 
 from dijet.tasks.jer import JER
 from dijet.plotting.base import PlottingBaseTask
-from dijet.plotting.asymmetry import PlotAsymmetries
 from dijet.plotting.util import annotate_corner, get_bin_slug, get_bin_label
 
 hist = maybe_import("hist")
@@ -20,7 +22,6 @@ mplhep = maybe_import("mplhep")
 
 
 class PlotJERs(
-    PlotAsymmetries,  # in order to reuse branch map and output function
     PlottingBaseTask,
 ):
     """
@@ -35,37 +36,8 @@ class PlotJERs(
     # how to create the branch map
     branching_type = "merged"
 
-    # upstream requirements
-    reqs = Requirements(
-        PlottingBaseTask.reqs,
-        JER=JER,
-    )
-
-    #
-    # methods required by law
-    #
-
-    def create_branch_map(self):
-        """
-        Workflow extends branch map of input task, creating one branch
-        per entry in the input task branch map per each eta bin (eta).
-        """
-        return PlotAsymmetries.create_branch_map(self)
-
-    def output(self) -> dict[law.FileSystemTarget]:
-        """
-        Organize output as a (nested) dictionary. Output files will be in a single
-        directory, which is determined by `store_parts`.
-        """
-        return PlotAsymmetries.output(self)
-
-    def requires(self):
-        return self.reqs.JER.req_different_branching(self, branch=-1)
-
-    def workflow_requires(self):
-        reqs = super().workflow_requires()
-        reqs["key"] = self.requires_from_branch()
-        return reqs
+    # upstream workflow
+    input_task_cls = JER
 
     #
     # helper methods for handling task inputs/outputs

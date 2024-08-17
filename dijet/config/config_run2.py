@@ -139,6 +139,7 @@ def add_config(
     cfg.x.samples = {
         "data": {
             "datasets": "data_*",
+            "label": "Data",
             "plot_kwargs": {
                 "__default__": {
                     "method": "errorbar",
@@ -160,6 +161,7 @@ def add_config(
         },
         "qcdht": {
             "datasets": "qcd_ht*",
+            "label": "MC",
             "plot_kwargs": {
                 "__default__": {
                     "method": "errorbar",
