@@ -16,29 +16,56 @@ plt = maybe_import("matplotlib.pyplot")
 mplhep = maybe_import("mplhep")
 
 
-class PlotJERs(PlottingBaseTask):
+class PlotJERs(
+    PlottingBaseTask,
+    law.LocalWorkflow,
+    RemoteWorkflow,
+):
     """
     Task to plot all JERs.
     One plot for each eta bin for each method (fe,sm).
     """
 
-    output_collection_cls = law.NestedSiblingFileCollection
+    # how to create the branch map
+    branching_type = "merged"
 
+    # upstream requirements
     reqs = Requirements(
+        RemoteWorkflow.reqs,
         JER=JER,
     )
 
+    # TODO: use config
     colors = {
         "da": "black",
         "mc": "indianred",
     }
 
+    #
+    # methods required by law
+    #
+
+    def output(self):
+        """
+        Organize output as a (nested) dictionary. Output files will be in a single
+        directory, which is determined by `store_parts`.
+        """
+        return {
+            "dummy": self.target("DUMMY"),
+            "plots": self.target("plots", dir=True),
+        }
+
     def requires(self):
-        return self.reqs.JER.req(
-            self,
-            processes=("qcd", "data"),
-            _exclude={"branches"},
-        )
+        return self.reqs.JER.req_different_branching(self, branch=-1)
+
+    def workflow_requires(self):
+        reqs = super().workflow_requires()
+        reqs["key"] = self.requires_from_branch()
+        return reqs
+
+    #
+    # helper methods for handling task inputs/outputs
+    #
 
     def load_jers(self):
         return (
@@ -46,17 +73,9 @@ class PlotJERs(PlottingBaseTask):
             self.input().collection[1]["jers"].load(formatter="pickle"),
         )
 
-    def output(self) -> dict[law.FileSystemTarget]:
-        # TODO: Unstable for changes like data_jetmet_X
-        #       Make independent like in config datasetname groups
-        sample = self.extract_sample()
-        target = self.target(f"{sample}", dir=True)
-        # declare the main target
-        outp = {
-            "single": target.child("jers", type="d"),
-            "dummy": target.child("dummy.txt", type="f"),
-        }
-        return outp
+    #
+    # task implementation
+    #
 
     def plot_jers(self, data, mc, pt):
         fig, ax = plt.subplots()
@@ -121,8 +140,5 @@ class PlotJERs(PlottingBaseTask):
                 plt.legend(loc="upper right")
 
                 store_bin_eta = f"eta_{dot_to_p(eta_lo)}_{dot_to_p(eta_hi)}"
-                self.output()["single"].child(
-                    f"jers_{m}_{store_bin_eta}.pdf",
-                    type="f",
-                ).dump(plt, formatter="mpl")
+                self.save_plot(f"jers_{m}_{store_bin_eta}", fig)
                 plt.close(fig)
